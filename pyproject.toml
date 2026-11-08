@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "security-mcp-server"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.3.0",
+    "pydantic>=2.14.3",
+]
+
+[project.scripts]
+security-mcp = "security_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/security_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
