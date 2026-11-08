@@ -51,7 +51,7 @@ graph TD
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/your-username/security-mcp-server.git](https://github.com/your-username/security-mcp-server.git)
+   git clone https://github.com/minhajadab3836/Security-MCP
    cd security-mcp-server
    ```
 
