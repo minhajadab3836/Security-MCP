@@ -1,6 +1,6 @@
 import re
-from src.security_mcp.sanitizer import sanitize_target, sanitize_url
-from src.security_mcp.executor import run_safe_command
+from security_mcp.sanitizer import sanitize_target, sanitize_url
+from security_mcp.executor import run_safe_command
 
 
 def lookup_dns(domain: str) -> str:
