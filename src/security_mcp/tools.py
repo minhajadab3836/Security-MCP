@@ -1,29 +1,32 @@
 import re
-from security_mcp.sanitizer import sanitize_target, sanitize_url
-from security_mcp.executor import run_safe_command
-
+from src.security_mcp.sanitizer import sanitize_target, sanitize_url
+from src.security_mcp.executor import run_safe_command
 
 def lookup_dns(domain: str) -> str:
     """
     Queries A, AAAA, MX, and TXT records using dig and formats results as a Markdown table.
     """
     clean_domain = sanitize_target(domain)
-    rows = []
-
-    # Query each record type individually against 1.1.1.1 to avoid resolver multi-query drops
-    for rtype in ["A", "AAAA", "MX", "TXT"]:
-        cmd = ["dig", "@1.1.1.1", "+noall", "+answer", clean_domain, rtype]
-        result = run_safe_command(cmd, timeout=5)
+    
+    # Execute dig for multiple record types
+    cmd = ["dig", "+noall", "+answer", clean_domain, "A", "AAAA", "MX", "TXT"]
+    result = run_safe_command(cmd, timeout=10)
+    
+    if result.timed_out or result.returncode != 0:
+        return f"**Error executing DNS lookup:** {result.stderr or 'Command timed out'}"
         
-        if result.returncode == 0 and result.stdout.strip():
-            for line in result.stdout.strip().splitlines():
-                parts = line.split(maxsplit=4)
-                if len(parts) == 5:
-                    _, ttl, _, rec_type, rvalue = parts
-                    rows.append(f"| `{rec_type}` | `{ttl}` | `{rvalue.strip()}` |")
-
-    if not rows:
+    if not result.stdout.strip():
         return f"No DNS records found for target domain `{clean_domain}`."
+        
+    rows = []
+    for line in result.stdout.strip().splitlines():
+        parts = line.split(maxsplit=4)
+        if len(parts) == 5:
+            rec_domain, ttl, rclass, rtype, rvalue = parts
+            rows.append(f"| `{rtype}` | `{ttl}` | `{rvalue.strip()}` |")
+            
+    if not rows:
+        return f"Raw Output for `{clean_domain}`:\n```\n{result.stdout}\n```"
 
     md = [
         f"### DNS Resolution: `{clean_domain}`\n",
@@ -40,25 +43,14 @@ def inspect_http_headers(url: str) -> str:
     """
     clean_url = sanitize_url(url)
     
-    # -L follows HTTP->HTTPS redirects; -A sets a clean User-Agent to avoid 403 WAF blocks
-    cmd = [
-        "curl", "-s", "-I", "-L",
-        "-A", "Mozilla/5.0 (Security-OSINT-Audit)",
-        "--max-time", "10",
-        clean_url
-    ]
+    # -s: silent, -I: fetch headers only, --max-time: timeout
+    cmd = ["curl", "-s", "-I", "--max-time", "10", clean_url]
     result = run_safe_command(cmd, timeout=12)
     
     if result.timed_out or result.returncode != 0:
         return f"**Error fetching HTTP headers:** {result.stderr or 'Connection timed out'}"
 
-    # If redirected (-L), grab the final HTTP response block
-    blocks = result.stdout.strip().split("\r\n\r\n")
-    if len(blocks) == 1:
-        blocks = result.stdout.strip().split("\n\n")
-    final_block = blocks[-1]
-
-    lines = final_block.splitlines()
+    lines = result.stdout.strip().splitlines()
     if not lines:
         return f"No response headers received from `{clean_url}`."
 
@@ -69,6 +61,7 @@ def inspect_http_headers(url: str) -> str:
             key, val = line.split(":", 1)
             headers[key.strip().lower()] = val.strip()
 
+    # Track presence of standard security headers
     security_headers = {
         "strict-transport-security": "HSTS",
         "content-security-policy": "CSP",
@@ -105,7 +98,11 @@ def inspect_ssl_cert(target: str) -> str:
     """
     clean_target = sanitize_target(target)
     
+    # Execute OpenSSL s_client to retrieve certificate details
+    # Piping empty input into s_client prevents process hanging
     cmd = ["openssl", "s_client", "-connect", f"{clean_target}:443", "-servername", clean_target]
+    
+    # Execute openssl s_client securely
     result = run_safe_command(cmd, timeout=10)
     
     if result.timed_out:
@@ -115,12 +112,14 @@ def inspect_ssl_cert(target: str) -> str:
     if "connect:errno=" in stdout or "Handshake failure" in stdout or not stdout:
         return f"**TLS Connection Failed:** Could not establish TLS handshake with `{clean_target}:443`."
 
+    # Parse subject, issuer, and validation dates from openssl output
     subject_match = re.search(r"subject=(.+)", stdout)
     issuer_match = re.search(r"issuer=(.+)", stdout)
     
     subject = subject_match.group(1).strip() if subject_match else "Unknown"
     issuer = issuer_match.group(1).strip() if issuer_match else "Unknown"
     
+    # Parse SANs if available in stdout
     sans = re.findall(r"DNS:[^\s,]+", stdout)
     san_list = ", ".join([s.replace("DNS:", "`") + "`" for s in sans[:5]]) if sans else "None extracted"
 
@@ -151,6 +150,7 @@ def lookup_whois(domain: str) -> str:
 
     raw_output = result.stdout
     
+    # Extract key WHOIS fields using regex patterns
     registrar = re.search(r"(?:Registrar:|Registrar Name:)\s*(.+)", raw_output, re.IGNORECASE)
     creation = re.search(r"(?:Creation Date:|Created On:)\s*(.+)", raw_output, re.IGNORECASE)
     expiry = re.search(r"(?:Registry Expiry Date:|Expiration Date:)\s*(.+)", raw_output, re.IGNORECASE)
